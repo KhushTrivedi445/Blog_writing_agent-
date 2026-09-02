@@ -2,27 +2,27 @@
 
 An AI-powered multi-agent blog writing application that researches a user-provided topic, creates a structured blog plan, generates detailed sections, and combines them into a complete Markdown blog.
 
-The project uses **LangGraph** to orchestrate the agent workflow, **Groq (`openai/gpt-oss-20b`)** for generation, **Tavily** for web research, and **Streamlit** for the user interface.
+The project uses **LangGraph** to orchestrate the agent workflow, **Groq (`openai/gpt-oss-20b`)** for AI generation, **Tavily** for web research, and **Streamlit** for the interactive user interface.
 
 ---
 
 ## 🚀 Features
 
-- 🤖 Multi-agent blog generation workflow
+- 🤖 Multi-agent AI blog generation
 - 🧠 LangGraph-based agent orchestration
 - 📋 Automatic blog planning
 - 🔎 Web research using Tavily
-- ✍️ AI-generated technical blog sections
-- 🔄 Parallel research for different blog sections
-- 🧩 Reducer node for combining generated sections
-- 📄 Markdown-based final output
-- 📊 Structured plan display
-- 📈 Live workflow progress in Streamlit
+- ✍️ AI-generated blog sections
+- 🔄 Parallel research for different sections
+- 🧩 Reducer-based section combination
+- 📄 Complete Markdown output
+- 📊 Structured blog plan
+- 📈 Live workflow progress
 - 🖼️ Locally generated SVG diagram
-- 💾 Download generated blogs as Markdown files
-- 🔁 Retry and fallback handling for failed LLM responses
-- ⚡ Token-aware prompts and research truncation
-- 🔐 Environment-variable based API key management
+- 💾 Download generated blogs as Markdown
+- 🔁 Retry and fallback handling
+- ⚡ Token-aware generation
+- 🔐 Secure API key management using environment variables
 
 ---
 
@@ -74,8 +74,7 @@ The project uses **LangGraph** to orchestrate the agent workflow, **Groq (`opena
                                   │
                                   ▼
                          ┌─────────────────┐
-                         │ Local SVG       │
-                         │ Diagram        │
+                         │   SVG Diagram   │
                          └─────────────────┘
 ```
 
@@ -85,7 +84,7 @@ The project uses **LangGraph** to orchestrate the agent workflow, **Groq (`opena
 
 ### 1. User Input
 
-The user enters a topic in the Streamlit interface.
+The user enters a topic through the Streamlit interface.
 
 Example:
 
@@ -93,9 +92,13 @@ Example:
 Machine Learning
 ```
 
+The topic is passed to the LangGraph workflow.
+
+---
+
 ### 2. Orchestrator Agent
 
-The Orchestrator analyzes the topic and creates a structured blog plan.
+The Orchestrator analyzes the requested topic and creates a structured blog plan.
 
 The plan contains:
 
@@ -104,19 +107,25 @@ The plan contains:
 - Section goals
 - Important points to cover
 
-This allows the system to break a large writing task into smaller tasks instead of asking one LLM call to generate the entire article.
+Breaking the task into smaller sections provides better control than generating the complete article using a single LLM call.
+
+---
 
 ### 3. Research Agents
 
-Each planned section is sent to a research agent.
+Each planned section is assigned to a research agent.
 
-The research agents use **Tavily** to find relevant information from the web.
+The research agents use **Tavily** to retrieve relevant information from the web.
 
-Research is performed separately for each section so that every writer receives focused information.
+Research is performed independently for different sections so that each writer receives focused context related to its assigned topic.
+
+---
 
 ### 4. Writer Agents
 
-The writer stage receives:
+The Writer agents generate individual Markdown sections using the research collected for each task.
+
+Each writer receives:
 
 - Blog topic
 - Blog title
@@ -125,29 +134,30 @@ The writer stage receives:
 - Required points
 - Relevant research
 
-The Groq model then generates the Markdown section.
+The generated content is designed to be:
 
-The prompt is designed to produce:
+- Informative
+- Clear
+- Technically accurate
+- Well structured
+- Markdown formatted
+- Easy to read
 
-- Clear explanations
-- Technical accuracy
-- Practical examples
-- Markdown formatting
-- Short paragraphs
-- Bullet points where useful
-- Code examples when relevant
+---
 
-### 5. Reducer
+### 5. Reducer / Combiner
 
-The Reducer combines the generated sections into the final blog.
+After the individual sections are generated, the Reducer combines them into a single final Markdown document.
 
-This produces one complete Markdown document instead of separate independent outputs.
+This creates one complete blog instead of separate independent sections.
+
+---
 
 ### 6. SVG Diagram
 
-A lightweight local SVG diagram is generated to visually represent the blog workflow.
+A lightweight SVG diagram is generated locally to represent the workflow.
 
-No additional image-generation API is required for this diagram.
+This avoids requiring an additional image-generation API and keeps the application lightweight.
 
 ---
 
@@ -158,20 +168,20 @@ No additional image-generation API is required for this diagram.
 | Python | Core programming language |
 | LangGraph | Agent workflow and state management |
 | LangChain | LLM and tool integration |
-| Groq | Fast LLM inference |
+| Groq | LLM inference |
 | `openai/gpt-oss-20b` | Blog planning and generation |
 | Tavily | Web research |
-| Streamlit | Frontend and interactive UI |
-| Pydantic | Structured data validation |
+| Streamlit | Interactive frontend |
+| Pydantic | Data validation |
 | python-dotenv | Environment variable management |
-| SVG | Lightweight local diagram generation |
+| SVG | Local diagram generation |
 
 ---
 
 ## 📂 Project Structure
 
 ```text
-AI-Blog-Writing-Agent/
+Blog_writing_agent-/
 │
 ├── screenshots/
 │   ├── 1_UI.jpeg
@@ -194,33 +204,40 @@ AI-Blog-Writing-Agent/
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/snehapankhi05/AI-Blog-Writing-Agent.git
+git clone https://github.com/KhushTrivedi445/Blog_writing_agent-.git
 ```
 
 ```bash
-cd AI-Blog-Writing-Agent
+cd Blog_writing_agent-
 ```
+
+---
 
 ### 2. Create a virtual environment
 
-Windows:
+#### Windows
 
 ```powershell
 python -m venv venv
 ```
 
-Activate it:
+Activate the environment:
 
 ```powershell
 .\venv\Scripts\Activate.ps1
 ```
 
-Linux/macOS:
+#### Linux / macOS
 
 ```bash
 python3 -m venv venv
+```
+
+```bash
 source venv/bin/activate
 ```
+
+---
 
 ### 3. Install dependencies
 
@@ -239,9 +256,9 @@ GROQ_API_KEY=your_groq_api_key
 TAVILY_API_KEY=your_tavily_api_key
 ```
 
-The `.env` file should never be committed to GitHub.
+Do not commit the `.env` file to GitHub.
 
-The repository uses `.gitignore` to keep API credentials and the virtual environment out of version control.
+The API keys should be stored only in environment variables.
 
 ---
 
@@ -261,39 +278,21 @@ Enter a topic and click:
 🚀 Generate Blog
 ```
 
-The interface displays the workflow progress while the agents execute.
+The application then runs the agentic workflow and generates the final blog.
 
 ---
 
-## 🖥️ Application Screenshots
-
-### Application Interface
-
-![Application Interface](./screenshots/1_UI.jpeg)
-
-### Agentic Blog Generation
-
-![Agentic Blog Generation](./screenshots/2_UI.jpeg)
-
-### Generated Blog
-
-![Generated Blog](./screenshots/3_UI.jpeg)
-
-### Generated Diagram
-
-![Generated Diagram](./screenshots/4_UI.jpeg)
-
 ---
 
-## 📌 Example Workflow
+## 📌 Example
 
-Input:
+### Input
 
 ```text
 Machine Learning
 ```
 
-The Orchestrator can create a plan such as:
+### Generated Plan
 
 ```text
 Mastering Machine Learning: A Practical Guide
@@ -305,36 +304,45 @@ Mastering Machine Learning: A Practical Guide
 5. Conclusion & Next Steps
 ```
 
-The research agents then gather information for the individual sections.
+The system then:
 
-The writer agents generate the sections.
-
-Finally, the Reducer combines them into one Markdown article.
+```text
+Topic
+  ↓
+Planning
+  ↓
+Research
+  ↓
+Writing
+  ↓
+Combining
+  ↓
+Final Blog
+```
 
 ---
 
 ## 🎯 Why LangGraph?
 
-A single LLM call could generate a blog, but it would provide less control over the workflow.
+LangGraph was selected to manage the multi-step agent workflow and state transitions.
 
-LangGraph was chosen because it provides:
+Using LangGraph makes it possible to:
 
-- Explicit workflow control
-- State management
-- Multiple agent stages
-- Conditional routing
-- Parallel execution
-- Reducer-based aggregation
-- Better observability
-- Easier extension of the workflow
+- Manage shared workflow state
+- Create multiple agent stages
+- Execute research tasks in parallel
+- Control the execution flow
+- Aggregate results using reducers
+- Handle complex agent workflows
+- Extend the application with additional agents
 
-The project demonstrates an actual agentic workflow rather than simply sending one prompt to an LLM.
+Instead of using a single LLM call, the project demonstrates a structured agentic workflow.
 
 ---
 
 ## 🤖 Why a Multi-Agent Architecture?
 
-The writing task is divided into specialized responsibilities:
+The blog generation process is divided into specialized stages:
 
 ```text
 Orchestrator
@@ -348,109 +356,106 @@ Writing
 Reduction
 ```
 
-Each stage has a specific purpose.
+Each stage has a dedicated responsibility.
 
-This makes the system easier to:
+This makes the application:
 
-- Debug
-- Extend
-- Control
-- Optimize
-- Maintain
-
-It also allows research and writing to be handled independently.
+- Easier to maintain
+- Easier to debug
+- More modular
+- More controllable
+- Easier to extend
+- More suitable for complex tasks
 
 ---
 
 ## 🔎 Research Strategy
 
-Tavily is used to provide external web information to the writing agents.
+Tavily provides external web information to the research agents.
 
-Research context is intentionally limited before being passed to the LLM.
+The retrieved information is filtered and limited before being passed to the writer agents.
 
 This helps:
 
-- Reduce token usage
 - Keep prompts focused
-- Avoid unnecessarily large contexts
+- Reduce unnecessary context
+- Control token usage
 - Improve generation efficiency
+- Provide topic-specific research
 
-The research stage is an internal part of the agent pipeline rather than the final user-facing output.
+Research is primarily an internal stage of the workflow and is used to improve the generated blog.
 
 ---
 
 ## 💰 Token Optimization
 
-The project was designed with limited LLM token usage in mind.
+The project is designed to use LLM resources efficiently.
 
-Several decisions were made to control token consumption:
+The following strategies are used:
 
-- Limited Tavily results
-- Truncated research context
-- Concise system prompts
-- Controlled output length
+- Limited research results
+- Controlled research context
 - Section-based generation
-- No unnecessary image-generation API
-- Retry only when generation fails
-- Local SVG generation instead of an external image model
+- Concise prompts
+- Controlled output length
+- Retry only when required
+- Local SVG generation instead of an external image-generation API
 
-This keeps the application lightweight and cost-efficient.
+These decisions help keep the application lightweight and cost-efficient.
 
 ---
 
 ## 🛡️ Reliability & Error Handling
 
-LLM-based systems can occasionally return empty responses or fail because of temporary API issues.
+LLM and external API calls can occasionally fail or return incomplete responses.
 
-The project therefore includes:
+The application therefore includes mechanisms such as:
 
 - Retry handling
 - Empty-response detection
-- Fallback section generation
+- Fallback content
 - API error handling
 - State validation
 - Controlled generation limits
 
-If a writer agent fails to produce content, the system can fall back to the section goal and required points instead of completely failing the workflow.
+If a section cannot be generated successfully, fallback content can be used instead of terminating the entire workflow.
 
 ---
 
-## 🧩 Important LangGraph Design Decision
+## 🧩 Parallel Research Design
 
-The research stage uses parallel execution.
+The research stage uses parallel execution for different blog sections.
 
-Initially, sending shared state values directly to parallel branches caused a LangGraph concurrent state update problem.
+Each research branch receives only the information required for its specific task.
 
-The solution was to send each research branch a private payload containing only the information it needs:
+Conceptually:
 
 ```text
 ResearchPayload
-    ├── task
-    └── topic
+├── task
+└── topic
 ```
 
-Research results are then aggregated into a reducer-backed state field.
+The research results are then collected into a shared reducer-backed state.
 
-This allows multiple research branches to complete without overwriting the same state value.
+This allows multiple research branches to execute without conflicting state updates.
 
 ---
 
-## 🖼️ Why Local SVG Instead of Image Generation?
+## 🖼️ Why Local SVG?
 
-The project does not require an additional image-generation API for its workflow diagram.
+The workflow diagram is generated locally using SVG instead of requiring another image-generation service.
 
-Instead, the diagram is generated locally using SVG.
-
-Advantages:
+Advantages include:
 
 - No additional API cost
 - No image model dependency
 - Fast generation
 - Lightweight output
-- Easy to customize
-- Works well for technical diagrams
+- Easy customization
+- Suitable for technical diagrams
 
-This keeps the application focused on the core agentic workflow.
+This keeps the project focused on the core agentic AI workflow.
 
 ---
 
@@ -461,8 +466,8 @@ The final output is a Markdown blog containing:
 - Blog title
 - Structured sections
 - Technical explanations
-- Bullet points
-- Examples where relevant
+- Important points
+- Examples where appropriate
 - Markdown formatting
 - Workflow diagram
 
@@ -472,56 +477,73 @@ The generated Markdown can also be downloaded from the Streamlit interface.
 
 ## 🔮 Future Improvements
 
-Possible future improvements include:
+Potential improvements include:
 
-- Better source ranking
+- Better research source ranking
 - Multiple search queries per section
-- Citation support inside generated blogs
-- Human-in-the-loop editing
-- Blog tone selection
-- SEO optimization
-- Automatic keyword extraction
-- Image generation
-- Blog quality evaluation
+- Automatic citations
 - Fact-checking agent
+- Human-in-the-loop editing
+- SEO optimization
+- Keyword extraction
+- Blog tone selection
+- Blog quality evaluation
 - Plagiarism detection
 - Multiple LLM provider support
 - Persistent blog history
 - Cloud deployment
-- Streaming token-level generation
+- Advanced image generation
 
 ---
 
 ## 🎓 Key Learning Outcomes
 
-Through this project, I worked with:
+This project provides practical experience with:
 
 - Agentic AI architecture
-- LangGraph state machines
-- Multi-agent workflows
+- LangGraph workflows
+- Multi-agent systems
 - Parallel agent execution
-- Reducer-based state aggregation
-- Tool calling
-- Web research with Tavily
-- LLM application development
+- State management
+- Reducer-based aggregation
+- Tool integration
+- Web research
 - Prompt engineering
+- LLM application development
 - Structured data validation
-- Error handling and retries
+- Error handling
+- Retry mechanisms
 - Token optimization
-- Streamlit application development
-- Git and GitHub project management
+- Streamlit development
+- Git and GitHub
 
 ---
 
 ## 🎯 Project Objective
 
-The main objective of this project was to build a practical **agentic AI system** capable of transforming a simple user topic into a researched and structured technical blog.
+The objective of this project is to build a practical agentic AI system that can transform a simple topic into a researched, structured, and readable technical blog.
 
-Instead of relying on a single LLM request, the system separates planning, research, writing, and final assembly into different stages managed by LangGraph.
+Rather than relying on one large LLM request, the system separates the process into planning, research, writing, and final assembly stages using LangGraph.
+
+This demonstrates how multiple specialized AI agents can collaborate to solve a larger task.
 
 ---
 
 ## 👨‍💻 Author
 
-**Khush Trivedi **
+**Khush Trivedi**
 
+GitHub:
+
+https://github.com/KhushTrivedi445
+
+Project Repository:
+
+https://github.com/KhushTrivedi445/Blog_writing_agent-
+
+---
+
+## 📜 License
+
+This project is created for educational, portfolio, and demonstration purposes.
+````
