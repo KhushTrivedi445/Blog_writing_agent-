@@ -523,18 +523,5 @@ Instead of relying on a single LLM request, the system separates planning, resea
 
 ## 👨‍💻 Author
 
-**Sneha Pankhi**
+**Khush Trivedi **
 
-GitHub:
-
-https://github.com/snehapankhi05
-
-Project:
-
-https://github.com/snehapankhi05/AI-Blog-Writing-Agent
-
----
-
-## 📜 License
-
-This project is intended for educational, portfolio, and demonstration purposes.
