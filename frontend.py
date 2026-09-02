@@ -1,164 +1,225 @@
-import json
-import re
 from pathlib import Path
 from datetime import date
+import re
 
-import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 from backend import app
 
 
 # ============================================================
-# CONFIG
+# PAGE CONFIG
 # ============================================================
 
 st.set_page_config(
     page_title="AI Blog Writer",
     page_icon="✍️",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded",
 )
-
-
-# ============================================================
-# HELPERS
-# ============================================================
-
-def safe_slug(title):
-
-    title = re.sub(
-        r"[^a-zA-Z0-9 _-]",
-        "",
-        title
-    )
-
-    return (
-        title.strip()
-        .lower()
-        .replace(" ", "_")
-        or "blog"
-    )
-
-
-def get_title(out):
-
-    plan = out.get("plan")
-
-    if hasattr(plan, "blog_title"):
-        return plan.blog_title
-
-    if isinstance(plan, dict):
-        return plan.get(
-            "blog_title",
-            "blog"
-        )
-
-    return "blog"
-
-
-def get_plan_dict(plan):
-
-    if hasattr(plan, "model_dump"):
-        return plan.model_dump()
-
-    if isinstance(plan, dict):
-        return plan
-
-    return {}
-
-
-def list_blogs():
-
-    files = list(
-        Path(".").glob("*.md")
-    )
-
-    return sorted(
-        files,
-        key=lambda x: x.stat().st_mtime,
-        reverse=True
-    )
 
 
 # ============================================================
 # SESSION STATE
 # ============================================================
 
-if "last_out" not in st.session_state:
-    st.session_state["last_out"] = None
+if "blog" not in st.session_state:
+    st.session_state.blog = ""
+
+if "plan" not in st.session_state:
+    st.session_state.plan = None
+
+if "image_plan" not in st.session_state:
+    st.session_state.image_plan = None
+
+if "generated_topic" not in st.session_state:
+    st.session_state.generated_topic = ""
+
+if "generated_date" not in st.session_state:
+    st.session_state.generated_date = ""
+
+
+# ============================================================
+# HELPERS
+# ============================================================
+
+def safe_filename(text: str) -> str:
+    text = re.sub(
+        r"[^a-zA-Z0-9 _-]",
+        "",
+        text,
+    ).strip()
+
+    text = text.lower().replace(
+        " ",
+        "_",
+    )
+
+    return text or "ai_generated_blog"
+
+
+def extract_title(markdown_text: str) -> str:
+
+    if not markdown_text:
+        return "AI Generated Blog"
+
+    for line in markdown_text.splitlines():
+
+        line = line.strip()
+
+        if line.startswith("# "):
+            return line[2:].strip()
+
+    return "AI Generated Blog"
+
+
+def resolve_image_path(image_path: str):
+
+    if not image_path:
+        return None
+
+    path = Path(image_path)
+
+    if path.is_absolute() and path.exists():
+        return path
+
+    if path.exists():
+        return path
+
+    project_path = (
+        Path(__file__).resolve().parent / path
+    )
+
+    if project_path.exists():
+        return project_path
+
+    return None
+
+
+def render_svg(image_path: str):
+
+    resolved = resolve_image_path(
+        image_path
+    )
+
+    if resolved is None:
+        st.warning(
+            "Diagram file was not found."
+        )
+        return
+
+    try:
+
+        svg_content = resolved.read_text(
+            encoding="utf-8"
+        )
+
+        components.html(
+            svg_content,
+            height=530,
+            scrolling=False,
+        )
+
+    except Exception as e:
+
+        st.warning(
+            f"Could not display diagram: {e}"
+        )
 
 
 # ============================================================
 # SIDEBAR
 # ============================================================
 
-st.sidebar.title("✍️ AI Blog Writer")
+with st.sidebar:
 
-topic = st.sidebar.text_area(
-    "Blog topic",
-    placeholder="e.g. Self Attention in Transformers",
-    height=120
-)
-
-as_of = st.sidebar.date_input(
-    "As-of date",
-    value=date.today()
-)
-
-generate = st.sidebar.button(
-    "🚀 Generate Blog",
-    type="primary",
-    use_container_width=True
-)
-
-
-# ============================================================
-# PAST BLOGS
-# ============================================================
-
-st.sidebar.divider()
-
-st.sidebar.subheader(
-    "📚 Previous Blogs"
-)
-
-blogs = list_blogs()
-
-if blogs:
-
-    selected = st.sidebar.selectbox(
-        "Select blog",
-        blogs,
-        format_func=lambda x: x.stem
+    st.title(
+        "✍️ AI Blog Writer"
     )
 
-    if st.sidebar.button(
-        "📂 Load Blog",
-        use_container_width=True
-    ):
+    topic = st.text_area(
+        "Blog topic",
+        placeholder="e.g. Machine Learning",
+        height=120,
+    )
 
-        content = selected.read_text(
-            encoding="utf-8"
+    as_of_date = st.date_input(
+        "As-of date",
+        value=date.today(),
+    )
+
+    generate = st.button(
+        "🚀 Generate Blog",
+        width="stretch",
+        type="primary",
+    )
+
+    st.divider()
+
+    st.subheader(
+        "📚 Previous Blogs"
+    )
+
+    blog_files = sorted(
+        Path(".").glob("*.md"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+
+    if blog_files:
+
+        selected_blog = st.selectbox(
+            "Select blog",
+            blog_files,
+            format_func=lambda p: p.stem.replace(
+                "_",
+                " ",
+            ).title(),
         )
 
-        st.session_state["last_out"] = {
-            "plan": None,
-            "evidence": [],
-            "final": content
-        }
+        open_blog = st.button(
+            "📖 Open Previous Blog",
+            width="stretch",
+        )
 
-else:
+        if open_blog:
 
-    st.sidebar.caption(
-        "No previous blogs found."
-    )
+            try:
+
+                st.session_state.blog = (
+                    selected_blog.read_text(
+                        encoding="utf-8"
+                    )
+                )
+
+                st.session_state.plan = None
+                st.session_state.image_plan = None
+                st.session_state.generated_topic = ""
+                st.session_state.generated_date = ""
+
+                st.rerun()
+
+            except Exception as e:
+
+                st.error(
+                    f"Could not open blog: {e}"
+                )
+
+    else:
+
+        st.caption(
+            "Generated blogs will appear here."
+        )
 
 
 # ============================================================
-# HEADER
+# MAIN HEADER
 # ============================================================
 
-st.title("✍️ Agentic AI Blog Writer")
+st.title(
+    "✍️ Agentic AI Blog Writer"
+)
 
 st.caption(
     "LangGraph • Groq • Tavily • Streamlit"
@@ -166,338 +227,388 @@ st.caption(
 
 
 # ============================================================
-# GENERATE
+# GENERATE BLOG
 # ============================================================
 
 if generate:
 
-    if not topic.strip():
+    cleaned_topic = topic.strip()
 
-        st.warning(
+    if not cleaned_topic:
+
+        st.error(
             "Please enter a blog topic."
         )
 
-        st.stop()
+    else:
 
-    inputs = {
-        "topic": topic.strip(),
-        "needs_research": False,
-        "queries": [],
-        "evidence": [],
-        "plan": None,
-        "sections": [],
-        "merged_md": "",
-        "final": "",
-        "image_plan": None,
-    }
+        # Clear previous results
+        st.session_state.blog = ""
+        st.session_state.plan = None
+        st.session_state.image_plan = None
 
-    progress = st.status(
-        "🚀 Running Agentic Blog Writer...",
-        expanded=True
-    )
+        st.session_state.generated_topic = (
+            cleaned_topic
+        )
 
-    try:
+        st.session_state.generated_date = (
+            str(as_of_date)
+        )
 
-        final_output = None
+        # ====================================================
+        # LIVE AGENT PROCESS
+        # ====================================================
 
-        for update in app.stream(
-            inputs,
-            stream_mode="updates"
-        ):
+        with st.status(
+            "🚀 Running Agentic Blog Writer...",
+            expanded=True,
+        ) as process:
 
-            for node_name, node_data in update.items():
+            try:
 
-                progress.write(
-                    f"✅ `{node_name}` completed"
+                result = {}
+
+                research_count = 0
+
+                total_research = 5
+
+                # IMPORTANT:
+                # Stream the graph ONCE.
+                for update in app.stream(
+                    {
+                        "topic": cleaned_topic,
+                        "needs_research": True,
+                        "queries": [],
+                        "evidence": [],
+                        "sections": [],
+                        "merged_md": "",
+                        "final": "",
+                        "image_plan": None,
+                    },
+                    stream_mode="updates",
+                ):
+
+                    if not isinstance(update, dict):
+                        continue
+
+                    for node_name, node_data in update.items():
+
+                        # ------------------------------------
+                        # PLAN
+                        # ------------------------------------
+
+                        if node_name == "orchestrator":
+
+                            if isinstance(
+                                node_data,
+                                dict,
+                            ):
+
+                                if node_data.get("plan"):
+
+                                    result["plan"] = (
+                                        node_data["plan"]
+                                    )
+
+                                    plan = (
+                                        node_data["plan"]
+                                    )
+
+                                    st.write(
+                                        "✅ orchestrator completed"
+                                    )
+
+                                    st.write(
+                                        f"🧩 Plan created: "
+                                        f"{plan.blog_title}"
+                                    )
+
+                                    st.write(
+                                        f"📚 Sections: "
+                                        f"{len(plan.tasks)}"
+                                    )
+
+                        # ------------------------------------
+                        # RESEARCH
+                        # ------------------------------------
+
+                        elif node_name == "research":
+
+                            research_count += 1
+
+                            st.write(
+                                "✅ research completed "
+                                f"({research_count}/{total_research})"
+                            )
+
+                        # ------------------------------------
+                        # WRITING
+                        # ------------------------------------
+
+                        elif node_name == "worker":
+
+                            st.write(
+                                "✅ blog sections completed"
+                            )
+
+                        # ------------------------------------
+                        # REDUCER
+                        # ------------------------------------
+
+                        elif node_name == "reducer":
+
+                            st.write(
+                                "✅ blog combined"
+                            )
+
+                            if isinstance(
+                                node_data,
+                                dict,
+                            ):
+
+                                if node_data.get(
+                                    "final"
+                                ):
+
+                                    result["final"] = (
+                                        node_data["final"]
+                                    )
+
+                                if node_data.get(
+                                    "image_plan"
+                                ):
+
+                                    result["image_plan"] = (
+                                        node_data[
+                                            "image_plan"
+                                        ]
+                                    )
+
+                # --------------------------------------------
+                # Save final results
+                # --------------------------------------------
+
+                st.session_state.plan = result.get(
+                    "plan"
                 )
 
-                if (
-                    isinstance(node_data, dict)
-                    and "final" in node_data
-                ):
-                    final_output = node_data
+                st.session_state.blog = result.get(
+                    "final",
+                    "",
+                )
 
-        # Get complete state
-        final_output = app.invoke(inputs)
+                st.session_state.image_plan = result.get(
+                    "image_plan"
+                )
 
-        st.session_state[
-            "last_out"
-        ] = final_output
+                process.update(
+                    label="✅ Blog generated successfully!",
+                    state="complete",
+                )
 
-        progress.update(
-            label="✅ Blog generated!",
-            state="complete",
-            expanded=False
-        )
+            except Exception as e:
 
-    except Exception as e:
+                process.update(
+                    label="❌ Blog generation failed",
+                    state="error",
+                )
 
-        progress.update(
-            label="❌ Generation failed",
-            state="error"
-        )
-
-        st.error(
-            f"Error: {e}"
-        )
+                st.error(
+                    f"Generation failed: {e}"
+                )
 
 
 # ============================================================
-# OUTPUT
+# RESULTS
 # ============================================================
 
-out = st.session_state.get(
-    "last_out"
+plan = st.session_state.plan
+blog = st.session_state.blog
+image_plan = st.session_state.image_plan
+
+
+# ============================================================
+# TABS
+# ============================================================
+
+tab_plan, tab_blog = st.tabs(
+    [
+        "🧩 Plan",
+        "📄 Blog",
+    ]
 )
 
 
-if out:
+# ============================================================
+# PLAN TAB
+# ============================================================
 
-    tabs = st.tabs(
-        [
-            "🧩 Plan",
-            "🔎 Research",
-            "📝 Blog",
-            "🖼️ Image",
-        ]
+with tab_plan:
+
+    st.subheader(
+        "🧩 Blog Plan"
     )
 
-    # --------------------------------------------------------
-    # PLAN
-    # --------------------------------------------------------
+    if plan:
 
-    with tabs[0]:
+        # -----------------------------------------------
+        # Main plan information
+        # -----------------------------------------------
 
-        st.subheader(
-            "Blog Plan"
+        st.markdown(
+            f"### {plan.blog_title}"
         )
 
-        plan = out.get("plan")
+        st.write(
+            f"**Audience:** {plan.audience}"
+        )
 
-        if plan:
+        st.write(
+            f"**Tone:** {plan.tone}"
+        )
 
-            plan_dict = get_plan_dict(
-                plan
+        st.divider()
+
+        # -----------------------------------------------
+        # Every task
+        # -----------------------------------------------
+
+        for index, task in enumerate(
+            plan.tasks,
+            start=1,
+        ):
+
+            st.markdown(
+                f"### {index}. {task.title}"
             )
 
             st.write(
-                "**Title:**",
-                plan_dict.get(
-                    "blog_title"
-                )
+                f"**Goal:** {task.goal}"
             )
 
-            col1, col2 = st.columns(2)
-
-            col1.write(
-                "**Audience:** "
-                + str(
-                    plan_dict.get(
-                        "audience"
-                    )
-                )
+            st.write(
+                "**Key points:**"
             )
 
-            col2.write(
-                "**Tone:** "
-                + str(
-                    plan_dict.get(
-                        "tone"
-                    )
-                )
-            )
+            for bullet in task.bullets:
 
-            tasks = plan_dict.get(
-                "tasks",
-                []
-            )
-
-            if tasks:
-
-                df = pd.DataFrame(
-                    tasks
+                st.markdown(
+                    f"- {bullet}"
                 )
 
-                st.dataframe(
-                    df,
-                    use_container_width=True,
-                    hide_index=True
-                )
+            if index < len(plan.tasks):
 
-        else:
+                st.divider()
 
-            st.info(
-                "No plan available."
-            )
+    else:
 
-
-    # --------------------------------------------------------
-    # RESEARCH
-    # --------------------------------------------------------
-
-    with tabs[1]:
-
-        st.subheader(
-            "Research Sources"
+        st.info(
+            "Generate a blog to see the complete plan."
         )
 
-        evidence = out.get(
-            "evidence",
-            []
+
+# ============================================================
+# BLOG TAB
+# ============================================================
+
+with tab_blog:
+
+    st.subheader(
+        "📄 Generated Blog"
+    )
+
+    if blog:
+
+        title = extract_title(
+            blog
         )
 
-        if not evidence:
+        # -----------------------------------------------
+        # Metadata
+        # -----------------------------------------------
 
-            st.info(
-                "No web research was required."
+        if st.session_state.generated_topic:
+
+            st.caption(
+                f"Topic: "
+                f"{st.session_state.generated_topic}"
             )
 
-        else:
-
-            rows = []
-
-            for item in evidence:
-
-                if hasattr(
-                    item,
-                    "model_dump"
-                ):
-                    item = item.model_dump()
-
-                rows.append(
-                    {
-                        "Title": item.get(
-                            "title"
-                        ),
-                        "Source": item.get(
-                            "url"
-                        ),
-                    }
-                )
-
-            st.dataframe(
-                pd.DataFrame(rows),
-                use_container_width=True,
-                hide_index=True
+            st.caption(
+                f"As-of date: "
+                f"{st.session_state.generated_date}"
             )
 
+            st.divider()
 
-    # --------------------------------------------------------
-    # BLOG
-    # --------------------------------------------------------
+        # -----------------------------------------------
+        # MARKDOWN FIRST
+        # -----------------------------------------------
 
-    with tabs[2]:
-
-        st.subheader(
-            "Generated Blog"
+        st.markdown(
+            blog
         )
 
-        final_md = out.get(
-            "final",
-            ""
+        # -----------------------------------------------
+        # DOWNLOAD BUTTON
+        # -----------------------------------------------
+
+        st.divider()
+
+        filename = (
+            safe_filename(title)
+            + ".md"
         )
 
-        if final_md:
-
-            st.markdown(
-                final_md
-            )
-
-            title = get_title(
-                out
-            )
-
-            filename = (
-                f"{safe_slug(title)}.md"
-            )
-
-            st.download_button(
-                "⬇️ Download Markdown",
-                data=final_md.encode(
-                    "utf-8"
-                ),
-                file_name=filename,
-                mime="text/markdown",
-                use_container_width=True
-            )
-
-        else:
-
-            st.warning(
-                "No blog generated."
-            )
-
-
-    # --------------------------------------------------------
-    # IMAGE
-    # --------------------------------------------------------
-
-    with tabs[3]:
-
-        st.subheader(
-            "🖼️ Image"
+        st.download_button(
+            "⬇️ Download Markdown",
+            data=blog,
+            file_name=filename,
+            mime="text/markdown",
+            width="stretch",
         )
 
-        image_plan = out.get(
-            "image_plan"
-        )
+        # -----------------------------------------------
+        # IMAGE AFTER MARKDOWN
+        # -----------------------------------------------
 
-        if not image_plan:
-
-            st.info(
-                "No image required."
-            )
-
-        else:
-
-            if hasattr(
-                image_plan,
-                "model_dump"
-            ):
-                image_plan = (
-                    image_plan.model_dump()
-                )
+        if image_plan:
 
             images = image_plan.get(
                 "images",
-                []
+                [],
             )
 
-            if not images:
+            if images:
 
-                st.info(
-                    "The editor decided that an image would not add enough value."
+                image_info = images[0]
+
+                image_path = image_info.get(
+                    "path",
+                    "",
                 )
 
-            else:
+                st.divider()
 
-                image = images[0]
+                st.subheader(
+                    "🖼️ Blog Diagram"
+                )
 
-                st.write(
-                    "**Image:**",
-                    image.get("alt")
+                render_svg(
+                    image_path
+                )
+
+                caption = image_info.get(
+                    "caption",
+                    "Minimal conceptual diagram.",
                 )
 
                 st.caption(
-                    image.get("caption")
+                    caption
                 )
 
-                st.info(
-                    "Image generation is intentionally limited to ONE image to reduce free-tier usage."
-                )
+    else:
 
-                with st.expander(
-                    "Image prompt"
-                ):
-                    st.code(
-                        image.get(
-                            "prompt",
-                            ""
-                        )
-                    )
-
-else:
-
-    st.info(
-        "Enter a topic in the sidebar and click **Generate Blog**."
-    )
+        st.info(
+            "Generate a blog to see the final article."
+        )

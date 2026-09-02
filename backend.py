@@ -1,20 +1,21 @@
 from __future__ import annotations
 
 import json
+import operator
 import os
+import re
 import time
 from pathlib import Path
-from typing import TypedDict, List, Annotated
-import operator
+from typing import Annotated, List, TypedDict
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_groq import ChatGroq
-from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_tavily import TavilySearch
 
-from langgraph.graph import StateGraph, START, END
+from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
 
@@ -24,14 +25,11 @@ from langgraph.types import Send
 
 load_dotenv()
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
+if not os.getenv("GROQ_API_KEY"):
+    raise ValueError("GROQ_API_KEY is missing. Add it to your .env file.")
 
-if not GROQ_API_KEY:
-    raise ValueError("GROQ_API_KEY missing from .env")
-
-if not TAVILY_API_KEY:
-    raise ValueError("TAVILY_API_KEY missing from .env")
+if not os.getenv("TAVILY_API_KEY"):
+    raise ValueError("TAVILY_API_KEY is missing. Add it to your .env file.")
 
 
 # ============================================================
@@ -41,7 +39,7 @@ if not TAVILY_API_KEY:
 llm = ChatGroq(
     model="openai/gpt-oss-20b",
     temperature=0,
-    max_tokens=200,
+    max_tokens=700,
 )
 
 
@@ -50,19 +48,22 @@ llm = ChatGroq(
 # ============================================================
 
 tavily = TavilySearch(
-    max_results=2
+    max_results=1
 )
 
 
 # ============================================================
-# 4. PLAN MODELS
+# 4. SCHEMAS
 # ============================================================
 
 class Task(BaseModel):
     id: int
     title: str
     goal: str
-    bullets: List[str]
+    bullets: List[str] = Field(
+        min_length=3,
+        max_length=3
+    )
 
 
 class Plan(BaseModel):
@@ -72,17 +73,30 @@ class Plan(BaseModel):
     tasks: List[Task]
 
 
-# ============================================================
-# 5. STATE
-# ============================================================
-
-class State(TypedDict):
+class ResearchPayload(TypedDict):
+    """
+    Private payload used by each parallel research branch.
+    These fields are NOT written into shared State.
+    """
+    task: Task
     topic: str
+
+
+class State(TypedDict, total=False):
+
+    topic: str
+
+    needs_research: bool
 
     plan: Plan
 
-    research: Annotated[
+    queries: Annotated[
         List[str],
+        operator.add
+    ]
+
+    evidence: Annotated[
+        List[dict],
         operator.add
     ]
 
@@ -91,102 +105,103 @@ class State(TypedDict):
         operator.add
     ]
 
+    merged_md: str
+
     final: str
 
+    image_plan: dict
+
 
 # ============================================================
-# 6. SAFE GROQ CALL
+# 5. HELPERS
 # ============================================================
 
-def groq_call(messages, retries=3):
+def clean_json(text: str) -> str:
+    text = text.strip()
+
+    # Remove ```json fences
+    text = re.sub(
+        r"^```json\s*",
+        "",
+        text,
+        flags=re.IGNORECASE
+    )
+
+    # Remove generic fences
+    text = re.sub(
+        r"^```\s*",
+        "",
+        text
+    )
+
+    text = re.sub(
+        r"\s*```$",
+        "",
+        text
+    )
+
+    # Extract JSON object
+    start = text.find("{")
+    end = text.rfind("}")
+
+    if start != -1 and end != -1:
+        text = text[start:end + 1]
+
+    return text.strip()
+
+
+def groq_call(messages, retries: int = 2):
+    """
+    Small retry wrapper for transient Groq 429 errors.
+    """
+    last_error = None
 
     for attempt in range(retries):
 
         try:
-
             return llm.invoke(messages)
 
         except Exception as e:
 
-            error = str(e)
+            last_error = e
+            error_text = str(e)
 
-            # Groq rate limit
-            if "429" in error or "rate_limit" in error:
+            if "429" not in error_text:
+                raise
 
-                wait_time = 8 + (attempt * 5)
+            # Small bounded wait
+            wait_time = 4 * (attempt + 1)
 
-                print(
-                    f"\n⏳ Groq rate limit. "
-                    f"Waiting {wait_time}s..."
-                )
+            print(
+                f"⏳ Groq rate limit. Waiting {wait_time}s..."
+            )
 
-                time.sleep(wait_time)
-
-            else:
-
-                raise e
+            time.sleep(wait_time)
 
     raise RuntimeError(
-        "Groq rate limit persisted after retries."
+        f"Groq rate limit persisted after retries: {last_error}"
     )
 
 
 # ============================================================
-# 7. EXTRACT JSON
-# ============================================================
-
-def extract_json(text: str):
-
-    text = text.strip()
-
-    # Remove markdown code fence
-    if text.startswith("```"):
-
-        lines = text.splitlines()
-
-        lines = [
-            line
-            for line in lines
-            if not line.strip().startswith("```")
-        ]
-
-        text = "\n".join(lines).strip()
-
-    # Find first {
-    start = text.find("{")
-
-    # Find last }
-    end = text.rfind("}")
-
-    if start == -1 or end == -1:
-
-        raise ValueError(
-            "Groq did not return valid JSON."
-        )
-
-    json_text = text[start:end + 1]
-
-    return json.loads(json_text)
-
-
-# ============================================================
-# 8. ORCHESTRATOR
+# 6. ORCHESTRATOR
 # ============================================================
 
 def orchestrator(state: State):
 
+    topic = state["topic"]
+
     print("\n🧠 Creating blog plan...")
 
     messages = [
-
         SystemMessage(
             content=(
-                "You are a technical blog planner.\n"
+                "Create a concise technical blog plan.\n"
                 "Return ONLY valid JSON.\n"
-                "Do NOT use markdown.\n"
-                "Do NOT use ```.\n\n"
+                "No markdown.\n"
+                "No explanation.\n\n"
 
-                "JSON format:\n"
+                "Schema:\n"
                 "{"
                 "\"blog_title\":\"...\","
                 "\"audience\":\"...\","
@@ -202,28 +217,28 @@ def orchestrator(state: State):
                 "}\n\n"
 
                 "Rules:\n"
-                "EXACTLY 5 tasks.\n"
-                "Exactly 3 bullets per task.\n"
-                "Keep all text short.\n"
-                "Task 1 = fundamentals.\n"
-                "Task 2 = core mechanism.\n"
-                "Task 3 = implementation/examples.\n"
-                "Task 4 = trade-offs/common mistakes.\n"
-                "Task 5 = conclusion.\n"
+                "- Exactly 5 tasks.\n"
+                "- Exactly 3 bullets per task.\n"
+                "- Keep everything concise.\n"
+                "- Technical and practical.\n"
+                "- Cover fundamentals, core mechanism, "
+                "implementation, mistakes/trade-offs, conclusion."
             )
         ),
-
         HumanMessage(
-            content=f"Topic: {state['topic']}"
+            content=f"Topic: {topic}"
         )
     ]
 
-    response = groq_call(messages)
+    response = groq_call(
+        messages,
+        retries=2
+    )
 
     try:
 
-        data = extract_json(
-            response.content
+        data = json.loads(
+            clean_json(response.content)
         )
 
         plan = Plan.model_validate(data)
@@ -234,62 +249,62 @@ def orchestrator(state: State):
             f"⚠️ Plan parsing failed: {e}"
         )
 
-        # Simple fallback
+        # Safe deterministic fallback.
         plan = Plan(
-            blog_title=state["topic"].title(),
-            audience="software developers",
-            tone="technical and practical",
+            blog_title=f"{topic}: From Theory to Production",
+            audience="Developers and AI/ML learners",
+            tone="Technical and practical",
             tasks=[
                 Task(
                     id=1,
                     title="Fundamentals",
-                    goal="Understand the basic concepts.",
+                    goal="Explain the basic concepts and why they matter.",
                     bullets=[
-                        "Define the core idea.",
-                        "Explain why it is useful.",
-                        "Show the basic workflow."
+                        "Definition",
+                        "Why it matters",
+                        "Key concepts",
                     ]
                 ),
                 Task(
                     id=2,
                     title="Core Mechanism",
-                    goal="Understand how the mechanism works.",
+                    goal="Explain how the system works internally.",
                     bullets=[
-                        "Explain the main components.",
-                        "Describe the processing steps.",
-                        "Explain the important equations."
+                        "Main components",
+                        "Workflow",
+                        "Important mechanisms",
                     ]
                 ),
                 Task(
                     id=3,
                     title="Implementation",
-                    goal="Understand how to implement it.",
+                    goal="Show how the concepts are applied in practice.",
                     bullets=[
-                        "Show a minimal example.",
-                        "Explain important parameters.",
-                        "Mention practical implementation tips."
+                        "Practical workflow",
+                        "Implementation choices",
+                        "Example",
                     ]
                 ),
                 Task(
                     id=4,
-                    title="Trade-offs and Mistakes",
-                    goal="Avoid common implementation problems.",
+                    title="Mistakes & Trade-offs",
+                    goal="Discuss common mistakes and important trade-offs.",
                     bullets=[
-                        "Explain major limitations.",
-                        "Show common mistakes.",
-                        "Explain performance considerations."
+                        "Common mistakes",
+                        "Limitations",
+                        "Trade-offs",
                     ]
                 ),
                 Task(
                     id=5,
                     title="Conclusion",
-                    goal="Summarize the practical takeaways.",
+                    goal="Summarize the key lessons and practical guidance.",
                     bullets=[
-                        "Summarize the main concepts.",
-                        "List important takeaways.",
-                        "Suggest what to learn next."
+                        "Key takeaways",
+                        "Best practices",
+                        "Next steps",
                     ]
-                )
+                ),
             ]
         )
 
@@ -307,30 +322,31 @@ def orchestrator(state: State):
 
 
 # ============================================================
-# 9. FANOUT → RESEARCH
+# 7. FANOUT
 # ============================================================
 
 def fanout(state: State):
 
-    return [
+    plan = state["plan"]
+    topic = state["topic"]
 
+    return [
         Send(
             "research",
             {
                 "task": task,
-                "topic": state["topic"]
+                "topic": topic,
             }
         )
-
-        for task in state["plan"].tasks
+        for task in plan.tasks
     ]
 
 
 # ============================================================
-# 10. RESEARCH
+# 8. RESEARCH
 # ============================================================
 
-def research_node(payload: dict):
+def research_node(payload: ResearchPayload):
 
     task = payload["task"]
     topic = payload["topic"]
@@ -339,9 +355,9 @@ def research_node(payload: dict):
         f"\n🔎 Researching: {task.title}"
     )
 
-    query = (
-        f"{topic} {task.title}"
-    )
+    query = f"{topic} {task.title}"
+
+    evidence = []
 
     try:
 
@@ -351,192 +367,617 @@ def research_node(payload: dict):
             }
         )
 
-        research_text = ""
+        if isinstance(results, dict):
 
-        # Tavily list
-        if isinstance(results, list):
-
-            for result in results[:2]:
-
-                if isinstance(result, dict):
-
-                    title = result.get(
-                        "title",
-                        ""
-                    )
-
-                    content = result.get(
-                        "content",
-                        ""
-                    )
-
-                    url = result.get(
-                        "url",
-                        ""
-                    )
-
-                    research_text += (
-                        f"{title}\n"
-                        f"{content[:800]}\n"
-                        f"{url}\n\n"
-                    )
-
-        # Tavily dictionary
-        elif isinstance(results, dict):
-
-            items = results.get(
-                "results",
-                []
+            possible_results = (
+                results.get("results")
+                or results.get("data")
+                or []
             )
 
-            for result in items[:2]:
+        elif isinstance(results, list):
 
-                if isinstance(result, dict):
-
-                    research_text += (
-                        f"{result.get('title', '')}\n"
-                        f"{result.get('content', '')[:800]}\n"
-                        f"{result.get('url', '')}\n\n"
-                    )
+            possible_results = results
 
         else:
 
-            research_text = str(results)
+            possible_results = []
+
+        for item in possible_results:
+
+            if not isinstance(item, dict):
+                continue
+
+            title = str(
+                item.get("title", "")
+            )
+
+            content = str(
+                item.get("content", "")
+            )
+
+            url = str(
+                item.get("url", "")
+            )
+
+            if content:
+
+                evidence.append(
+                    {
+                        "task_id": task.id,
+                        "task_title": task.title,
+                        "title": title[:160],
+                        "content": content[:1400],
+                        "url": url[:300],
+                    }
+                )
+
+            # Only one useful source
+            if len(evidence) >= 1:
+                break
 
     except Exception as e:
 
         print(
-            f"⚠️ Research failed: {e}"
+            f"⚠️ Tavily research failed for "
+            f"{task.title}: {e}"
         )
 
-        research_text = (
-            "No external research available."
-        )
+    if not evidence:
 
-    # VERY IMPORTANT
-    # Keep Tavily context small
-    research_text = research_text[:1800]
+        evidence.append(
+            {
+                "task_id": task.id,
+                "task_title": task.title,
+                "title": "No external source",
+                "content": (
+                    "No external research was available. "
+                    "Use general technical knowledge carefully."
+                ),
+                "url": "",
+            }
+        )
 
     return {
-        "research": [
-            research_text
+        "evidence": evidence
+    }
+
+
+# ============================================================
+# 9. WRITER
+# ============================================================
+
+def worker(state: State):
+
+    topic = state["topic"]
+    plan = state["plan"]
+
+    evidence = state.get(
+        "evidence",
+        []
+    )
+
+    print("\n✍️ Writing blog sections...")
+
+    # ========================================================
+    # Group research by task
+    # ========================================================
+
+    research_by_task = {}
+
+    for item in evidence:
+
+        task_id = item.get("task_id")
+
+        if task_id not in research_by_task:
+            research_by_task[task_id] = []
+
+        research_by_task[task_id].append(item)
+
+    sections = []
+
+    # ========================================================
+    # Generate each section
+    # ========================================================
+
+    for task in plan.tasks:
+
+        print(
+            f"✍️ Writing: {task.title}"
+        )
+
+        # ----------------------------------------------------
+        # Collect research for this task
+        # ----------------------------------------------------
+
+        task_evidence = research_by_task.get(
+            task.id,
+            []
+        )
+
+        research_text = ""
+
+        for item in task_evidence:
+
+            research_text += (
+                f"Source: {item.get('title', '')}\n"
+                f"Content: {item.get('content', '')}\n"
+                f"URL: {item.get('url', '')}\n\n"
+            )
+
+        # Keep prompt small to reduce Groq token usage
+        research_text = research_text[:1600]
+
+        bullets = "\n".join(
+            f"- {bullet}"
+            for bullet in task.bullets
+        )
+
+        # ====================================================
+        # SPECIAL CASE: CONCLUSION
+        # ====================================================
+
+        is_conclusion = (
+            task.id == plan.tasks[-1].id
+        )
+
+        # ----------------------------------------------------
+        # Normal sections
+        # ----------------------------------------------------
+
+        if not is_conclusion:
+
+            messages = [
+                SystemMessage(
+    content=(
+        "You are an expert technical blog writer.\n\n"
+
+        "Write ONE detailed, polished Markdown section for a "
+        "long-form technical blog.\n\n"
+
+        "Writing requirements:\n"
+        "- Write approximately 250-300 words.\n"
+        "- Explain the topic clearly from basic to practical level.\n"
+        "- Use short paragraphs of 2-4 sentences.\n"
+        "- Explain important technical terms in simple language.\n"
+        "- Include practical examples where relevant.\n"
+        "- Cover ALL required points.\n"
+        "- Add useful technical detail instead of filler.\n"
+        "- Avoid repeating ideas from other sections.\n"
+        "- Do not copy the research text directly.\n"
+        "- Do not mention the research process.\n"
+        "- Do not invent unsupported technical claims.\n\n"
+
+        "Formatting requirements:\n"
+        "- Start with ## and the exact section title.\n"
+        "- Use ### subsections when they improve readability.\n"
+        "- Use bullet lists when appropriate.\n"
+        "- Use numbered steps for workflows.\n"
+        "- Use **bold** for important concepts.\n"
+        "- Use inline code for functions, variables, parameters, "
+        "libraries, and technical identifiers.\n"
+        "- Use code blocks when a real code example is useful.\n"
+        "- Do not create an H1.\n"
+        "- Return ONLY the Markdown section."
+    )
+),
+
+                HumanMessage(
+                    content=(
+                        f"Topic: {topic}\n"
+                        f"Blog title: {plan.blog_title}\n"
+                        f"Audience: {plan.audience}\n\n"
+
+                        f"Section title: {task.title}\n"
+                        f"Section goal: {task.goal}\n\n"
+
+                        f"Required points:\n"
+                        f"{bullets}\n\n"
+
+                        f"Research:\n"
+                        f"{research_text}"
+                    )
+                )
+            ]
+
+            section = ""
+
+            # ------------------------------------------------
+            # At most 2 attempts for normal sections
+            # ------------------------------------------------
+
+            for attempt in range(2):
+
+                try:
+
+                    response = groq_call(
+                        messages,
+                        retries=2
+                    )
+
+                    content = response.content
+
+                    # Standard Groq/LangChain response
+                    if isinstance(content, str):
+
+                        section = content.strip()
+
+                    # Some models can return block-style content
+                    elif isinstance(content, list):
+
+                        parts = []
+
+                        for block in content:
+
+                            if isinstance(block, dict):
+
+                                text = block.get(
+                                    "text",
+                                    ""
+                                )
+
+                                if text:
+                                    parts.append(
+                                        str(text)
+                                    )
+
+                        section = "\n".join(
+                            parts
+                        ).strip()
+
+                    if section:
+                        break
+
+                    print(
+                        f"⚠️ Empty response for "
+                        f"{task.title}. Retrying..."
+                    )
+
+                    if attempt == 0:
+                        time.sleep(1)
+
+                except Exception as e:
+
+                    print(
+                        f"⚠️ Writing failed for "
+                        f"{task.title}: {e}"
+                    )
+
+                    if attempt == 0:
+                        time.sleep(2)
+
+            # ------------------------------------------------
+            # Safe fallback for normal sections
+            # ------------------------------------------------
+
+            if not section:
+
+                section = (
+                    f"## {task.title}\n\n"
+                    f"{task.goal}\n\n"
+                    "Key points:\n"
+                    + "\n".join(
+                        f"- {bullet}"
+                        for bullet in task.bullets
+                    )
+                )
+
+            sections.append(
+                section.strip()
+            )
+
+            continue
+
+        # ====================================================
+        # CONCLUSION
+        # ====================================================
+
+        print(
+            "🧠 Creating conclusion from generated sections..."
+        )
+
+        # Use already generated content.
+        # This prevents the conclusion from depending only
+        # on Tavily research and gives the model context
+        # about the actual article.
+        previous_content = "\n\n".join(
+            sections
+        )
+
+        # Keep the conclusion prompt reasonably small.
+        previous_content = previous_content[-5000:]
+
+        conclusion_messages = [
+
+            SystemMessage(
+                content=(
+                    "You are finishing a technical blog.\n\n"
+
+                    "Write a concise conclusion based ONLY on "
+                    "the article content provided.\n"
+
+                    "Rules:\n"
+                    "- Start with ## Conclusion & Next Steps.\n"
+                    "- Summarize the main technical lessons.\n"
+                    "- Mention practical next steps.\n"
+                    "- Do not introduce unrelated claims.\n"
+                    "- Do not repeat entire sections.\n"
+                    "- Write approximately 80-110 words.\n"
+                    "- Return ONLY the Markdown section."
+                )
+            ),
+
+            HumanMessage(
+                content=(
+                    f"Blog title: {plan.blog_title}\n"
+                    f"Topic: {topic}\n\n"
+
+                    f"Article written so far:\n"
+                    f"{previous_content}\n\n"
+
+                    "Create the conclusion now."
+                )
+            )
+        ]
+
+        section = ""
+
+        # ----------------------------------------------------
+        # One retry only for conclusion
+        # ----------------------------------------------------
+
+        for attempt in range(2):
+
+            try:
+
+                response = groq_call(
+                    conclusion_messages,
+                    retries=1
+                )
+
+                content = response.content
+
+                if isinstance(content, str):
+
+                    section = content.strip()
+
+                elif isinstance(content, list):
+
+                    parts = []
+
+                    for block in content:
+
+                        if isinstance(block, dict):
+
+                            text = block.get(
+                                "text",
+                                ""
+                            )
+
+                            if text:
+                                parts.append(
+                                    str(text)
+                                )
+
+                    section = "\n".join(
+                        parts
+                    ).strip()
+
+                if section:
+                    break
+
+                print(
+                    "⚠️ Empty conclusion response. "
+                    "Retrying..."
+                )
+
+                if attempt == 0:
+                    time.sleep(1)
+
+            except Exception as e:
+
+                print(
+                    f"⚠️ Conclusion generation failed: {e}"
+                )
+
+                if attempt == 0:
+                    time.sleep(1)
+
+        # ====================================================
+        # Deterministic conclusion fallback
+        # ====================================================
+
+        if not section:
+
+            section = (
+                "## Conclusion & Next Steps\n\n"
+                f"{topic.title()} is best understood by "
+                "combining its fundamental concepts with "
+                "practical implementation and careful evaluation. "
+                "The key lessons are to understand how the underlying "
+                "methods work, follow a reliable development workflow, "
+                "and consider limitations and trade-offs before "
+                "deployment. A practical next step is to build a "
+                "small project, evaluate its results, and gradually "
+                "explore more advanced techniques."
+            )
+
+        sections.append(
+            section.strip()
+        )
+
+    # ========================================================
+    # Return all generated sections
+    # ========================================================
+
+    return {
+        "sections": sections
+    }
+# ============================================================
+# 10. LOCAL SVG IMAGE
+# ============================================================
+
+def create_image_plan(title: str, topic: str):
+
+    safe_title = re.sub(
+        r"[^a-zA-Z0-9 _-]",
+        "",
+        title
+    ).strip()
+
+    filename = (
+        safe_title.lower()
+        .replace(" ", "_")
+        or "blog"
+    )
+
+    image_filename = (
+        f"{filename}_diagram.svg"
+    )
+
+    safe_topic = re.sub(
+        r"[^a-zA-Z0-9 ,.:_-]",
+        "",
+        topic
+    )[:80]
+
+    svg = f"""<svg
+xmlns="http://www.w3.org/2000/svg"
+width="1200"
+height="500"
+viewBox="0 0 1200 500">
+
+<rect
+width="1200"
+height="500"
+fill="#111827"/>
+
+<text
+x="600"
+y="80"
+text-anchor="middle"
+font-family="Arial"
+font-size="36"
+font-weight="bold"
+fill="white">
+{safe_title[:55]}
+</text>
+
+<rect
+x="100"
+y="180"
+width="220"
+height="100"
+rx="15"
+fill="#1f2937"
+stroke="#9ca3af"/>
+
+<text
+x="210"
+y="240"
+text-anchor="middle"
+font-family="Arial"
+font-size="24"
+fill="white">
+Input
+</text>
+
+<rect
+x="490"
+y="180"
+width="220"
+height="100"
+rx="15"
+fill="#1f2937"
+stroke="#9ca3af"/>
+
+<text
+x="600"
+y="240"
+text-anchor="middle"
+font-family="Arial"
+font-size="24"
+fill="white">
+Processing
+</text>
+
+<rect
+x="880"
+y="180"
+width="220"
+height="100"
+rx="15"
+fill="#1f2937"
+stroke="#9ca3af"/>
+
+<text
+x="990"
+y="240"
+text-anchor="middle"
+font-family="Arial"
+font-size="24"
+fill="white">
+Output
+</text>
+
+<line
+x1="320"
+y1="230"
+x2="490"
+y2="230"
+stroke="white"
+stroke-width="4"/>
+
+<polygon
+points="490,230 470,215 470,245"
+fill="white"/>
+
+<line
+x1="710"
+y1="230"
+x2="880"
+y2="230"
+stroke="white"
+stroke-width="4"/>
+
+<polygon
+points="880,230 860,215 860,245"
+fill="white"/>
+
+<text
+x="600"
+y="380"
+text-anchor="middle"
+font-family="Arial"
+font-size="22"
+fill="#d1d5db">
+{safe_topic}
+</text>
+
+</svg>
+"""
+
+    Path(image_filename).write_text(
+        svg,
+        encoding="utf-8"
+    )
+
+    return {
+        "images": [
+            {
+                "alt": f"Diagram for {title}",
+                "caption": "Minimal conceptual diagram.",
+                "prompt": (
+                    f"Minimal technical diagram explaining {topic}."
+                ),
+                "path": image_filename,
+            }
         ]
     }
 
 
 # ============================================================
-# 11. RESEARCH → WORKER
-# ============================================================
-
-def research_to_worker(state: State):
-
-    sends = []
-
-    tasks = state["plan"].tasks
-
-    research_items = state["research"]
-
-    for i, task in enumerate(tasks):
-
-        research = ""
-
-        if i < len(research_items):
-
-            research = research_items[i]
-
-        sends.append(
-
-            Send(
-                "worker",
-                {
-                    "task": task,
-                    "topic": state["topic"],
-                    "plan": state["plan"],
-                    "research": research
-                }
-            )
-        )
-
-    return sends
-
-
-# ============================================================
-# 12. WORKER
-# ============================================================
-
-def worker(payload: dict):
-
-    task = payload["task"]
-    topic = payload["topic"]
-    plan = payload["plan"]
-    research = payload.get(
-        "research",
-        ""
-    )
-
-    print(
-        f"✍️ Writing: {task.title}"
-    )
-
-    bullets = "\n".join(
-        f"- {b}"
-        for b in task.bullets
-    )
-
-    messages = [
-
-        SystemMessage(
-            content=(
-                "You are a concise technical writer.\n\n"
-
-                "Write ONE Markdown section.\n"
-
-                "Rules:\n"
-                "Start with ## section title.\n"
-                "Cover all 3 bullets.\n"
-                "Use the research when useful.\n"
-                "Maximum 120 words.\n"
-                "No H1.\n"
-                "No introduction outside the section.\n"
-                "No conclusion outside the section.\n"
-                "Avoid repetition.\n"
-                "Be technically accurate."
-            )
-        ),
-
-        HumanMessage(
-            content=(
-                f"Topic: {topic}\n"
-                f"Blog: {plan.blog_title}\n"
-                f"Audience: {plan.audience}\n\n"
-
-                f"Section: {task.title}\n"
-                f"Goal: {task.goal}\n\n"
-
-                f"Bullets:\n"
-                f"{bullets}\n\n"
-
-                f"Research:\n"
-                f"{research[:1500]}"
-            )
-        )
-    ]
-
-    response = groq_call(
-        messages
-    )
-
-    section = response.content.strip()
-
-    return {
-        "sections": [
-            section
-        ]
-    }
-
-
-# ============================================================
-# 13. REDUCER
+# 11. REDUCER
 # ============================================================
 
 def reducer(state: State):
@@ -547,7 +988,10 @@ def reducer(state: State):
 
     title = state["plan"].blog_title
 
-    sections = state["sections"]
+    sections = state.get(
+        "sections",
+        []
+    )
 
     body = "\n\n".join(
         sections
@@ -558,46 +1002,48 @@ def reducer(state: State):
         f"{body}\n"
     )
 
-    # Safe filename
-    filename = "".join(
-
-        c
-        if c.isalnum()
-        or c in (" ", "_", "-")
-        else ""
-
-        for c in title
+    # Save Markdown
+    filename = re.sub(
+        r"[^a-zA-Z0-9 _-]",
+        "",
+        title
     )
 
     filename = (
-        filename
-        .strip()
+        filename.strip()
         .lower()
         .replace(" ", "_")
+        or "blog"
     )
 
-    if not filename:
+    markdown_path = Path(
+        filename + ".md"
+    )
 
-        filename = "blog"
-
-    filename += ".md"
-
-    Path(filename).write_text(
+    markdown_path.write_text(
         final_md,
         encoding="utf-8"
     )
 
     print(
-        f"💾 Saved: {filename}"
+        f"💾 Saved: {markdown_path}"
+    )
+
+    # One local image
+    image_plan = create_image_plan(
+        title,
+        state["topic"]
     )
 
     return {
-        "final": final_md
+        "merged_md": final_md,
+        "final": final_md,
+        "image_plan": image_plan,
     }
 
 
 # ============================================================
-# 14. GRAPH
+# 12. GRAPH
 # ============================================================
 
 graph = StateGraph(State)
@@ -622,12 +1068,10 @@ graph.add_node(
     reducer
 )
 
-
 graph.add_edge(
     START,
     "orchestrator"
 )
-
 
 graph.add_conditional_edges(
     "orchestrator",
@@ -635,31 +1079,29 @@ graph.add_conditional_edges(
     ["research"]
 )
 
-
-graph.add_conditional_edges(
+# Important:
+# All parallel research branches finish before
+# the worker node continues.
+graph.add_edge(
     "research",
-    research_to_worker,
-    ["worker"]
+    "worker"
 )
-
 
 graph.add_edge(
     "worker",
     "reducer"
 )
 
-
 graph.add_edge(
     "reducer",
     END
 )
 
-
 app = graph.compile()
 
 
 # ============================================================
-# 15. RUN
+# 13. TERMINAL MODE
 # ============================================================
 
 if __name__ == "__main__":
@@ -685,8 +1127,13 @@ if __name__ == "__main__":
         output = app.invoke(
             {
                 "topic": topic,
-                "research": [],
+                "needs_research": True,
+                "queries": [],
+                "evidence": [],
                 "sections": [],
+                "merged_md": "",
+                "final": "",
+                "image_plan": None,
             }
         )
 
@@ -704,8 +1151,7 @@ if __name__ == "__main__":
         )
 
         print(
-            "\n"
-            + output["final"]
+            output["final"]
         )
 
         print(
