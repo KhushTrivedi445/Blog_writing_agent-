@@ -541,6 +541,8 @@ Project Repository:
 
 https://github.com/KhushTrivedi445/Blog_writing_agent-
 
+Author: Khush Trivedi
+
 ---
 
 ## 📜 License
